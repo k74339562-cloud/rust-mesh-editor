@@ -3,6 +3,8 @@ use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, EventLoop},
+    platform::android::activity::AndroidApp,
+    platform::android::EventLoopBuilderExtAndroid,
     window::{Window, WindowId},
 };
 
@@ -28,12 +30,12 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                // هنا سيتم استدعاء شيدرات ومحرك wgpu لرسم المجسم
+                // استدعاء شيدرات ومحرك wgpu للرسم
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 log::info!("حدث نقر بالفأرة: {:?} الحالة: {:?}", button, state);
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::CursorMoved { position: _position, .. } => {
                 // تتبع حركة الفأرة لتحريك الكاميرا والتحديد
             }
             _ => (),
@@ -43,7 +45,7 @@ impl ApplicationHandler for App {
 
 // نقطة الدخول الخاصة بنظام أندرويد (Entry Point)
 #[no_mangle]
-fn android_main(app: android_activity::AndroidApp) {
+fn android_main(app: AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
