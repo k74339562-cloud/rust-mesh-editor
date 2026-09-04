@@ -1,13 +1,19 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use glam::{Mat4, Vec3};
 use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     platform::android::activity::AndroidApp,
     platform::android::EventLoopBuilderExtAndroid,
     window::{Window, WindowId},
 };
+
+// ==========================================
+// 1. هياكل البيانات للرسم ثلاثي الأبعاد والواجهة
+// ==========================================
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,49 +28,81 @@ impl Vertex {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
             ],
         }
     }
 }
 
-// بيانات المكعب الافتراضي (24 نقطة للحصول على زوايا ونورمالز حادة)
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct LineVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+
+impl LineVertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LineVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x4 },
+            ],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct UiVertex {
+    position: [f32; 2],
+    color: [f32; 4],
+}
+
+impl UiVertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<UiVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 8, shader_location: 1, format: wgpu::VertexFormat::Float32x4 },
+            ],
+        }
+    }
+}
+
+// 24 رأس للمكعب الافتراضي
 const CUBE_VERTICES: &[Vertex] = &[
-    // الوجه الأمامي (Z+)
+    // Front (Z+)
     Vertex { position: [-1.0, -1.0,  1.0], normal: [ 0.0,  0.0,  1.0] },
     Vertex { position: [ 1.0, -1.0,  1.0], normal: [ 0.0,  0.0,  1.0] },
     Vertex { position: [ 1.0,  1.0,  1.0], normal: [ 0.0,  0.0,  1.0] },
     Vertex { position: [-1.0,  1.0,  1.0], normal: [ 0.0,  0.0,  1.0] },
-    // الوجه الخلفي (Z-)
+    // Back (Z-)
     Vertex { position: [ 1.0, -1.0, -1.0], normal: [ 0.0,  0.0, -1.0] },
     Vertex { position: [-1.0, -1.0, -1.0], normal: [ 0.0,  0.0, -1.0] },
     Vertex { position: [-1.0,  1.0, -1.0], normal: [ 0.0,  0.0, -1.0] },
     Vertex { position: [ 1.0,  1.0, -1.0], normal: [ 0.0,  0.0, -1.0] },
-    // الوجه العلوي (Y+)
+    // Top (Y+)
     Vertex { position: [-1.0,  1.0,  1.0], normal: [ 0.0,  1.0,  0.0] },
     Vertex { position: [ 1.0,  1.0,  1.0], normal: [ 0.0,  1.0,  0.0] },
     Vertex { position: [ 1.0,  1.0, -1.0], normal: [ 0.0,  1.0,  0.0] },
     Vertex { position: [-1.0,  1.0, -1.0], normal: [ 0.0,  1.0,  0.0] },
-    // الوجه السفلي (Y-)
+    // Bottom (Y-)
     Vertex { position: [-1.0, -1.0, -1.0], normal: [ 0.0, -1.0,  0.0] },
     Vertex { position: [ 1.0, -1.0, -1.0], normal: [ 0.0, -1.0,  0.0] },
     Vertex { position: [ 1.0, -1.0,  1.0], normal: [ 0.0, -1.0,  0.0] },
     Vertex { position: [-1.0, -1.0,  1.0], normal: [ 0.0, -1.0,  0.0] },
-    // الوجه الأيمن (X+)
+    // Right (X+)
     Vertex { position: [ 1.0, -1.0,  1.0], normal: [ 1.0,  0.0,  0.0] },
     Vertex { position: [ 1.0, -1.0, -1.0], normal: [ 1.0,  0.0,  0.0] },
     Vertex { position: [ 1.0,  1.0, -1.0], normal: [ 1.0,  0.0,  0.0] },
     Vertex { position: [ 1.0,  1.0,  1.0], normal: [ 1.0,  0.0,  0.0] },
-    // الوجه الأيسر (X-)
+    // Left (X-)
     Vertex { position: [-1.0, -1.0, -1.0], normal: [-1.0,  0.0,  0.0] },
     Vertex { position: [-1.0, -1.0,  1.0], normal: [-1.0,  0.0,  0.0] },
     Vertex { position: [-1.0,  1.0,  1.0], normal: [-1.0,  0.0,  0.0] },
@@ -72,17 +110,22 @@ const CUBE_VERTICES: &[Vertex] = &[
 ];
 
 const CUBE_INDICES: &[u16] = &[
-    0, 1, 2,  0, 2, 3,       // Front
-    4, 5, 6,  4, 6, 7,       // Back
-    8, 9, 10, 8, 10, 11,     // Top
-    12, 13, 14, 12, 14, 15,  // Bottom
-    16, 17, 18, 16, 18, 19,  // Right
-    20, 21, 22, 20, 22, 23,  // Left
+    0, 1, 2,  0, 2, 3,
+    4, 5, 6,  4, 6, 7,
+    8, 9, 10, 8, 10, 11,
+    12, 13, 14, 12, 14, 15,
+    16, 17, 18, 16, 18, 19,
+    20, 21, 22, 20, 22, 23,
 ];
 
-const SHADER_SOURCE: &str = r#"
+// ==========================================
+// 2. شيدرات الرسوميات (WGSL Shaders)
+// ==========================================
+
+const 3D_SHADER_SOURCE: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
+    model: mat4x4<f32>,
 };
 
 @group(0) @binding(0)
@@ -101,41 +144,147 @@ struct VertexOutput {
 @vertex
 fn vs_main(model: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.world_normal = model.normal;
-    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
+    let world_pos = camera.model * vec4<f32>(model.position, 1.0);
+    out.world_normal = (camera.model * vec4<f32>(model.normal, 0.0)).xyz;
+    out.clip_position = camera.view_proj * world_pos;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.8));
+    let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.7));
     let n = normalize(in.world_normal);
-    let diff = max(dot(n, light_dir), 0.2);
-    // تدرج لوني أزرق رمادي مستوحى من مظهر بلندر الافتراضي
-    let base_color = vec3<f32>(0.4, 0.5, 0.65);
+    let diff = max(dot(n, light_dir), 0.22);
+    // تدرج لوني رمادي أزرق يحاكي خامة بلندر الصلبة (Solid MatCap)
+    let base_color = vec3<f32>(0.50, 0.54, 0.62);
     return vec4<f32>(base_color * diff, 1.0);
 }
 "#;
+
+const LINE_SHADER_SOURCE: &str = r#"
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+    model: mat4x4<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> camera: CameraUniform;
+
+struct LineInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+struct LineOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(in: LineInput) -> LineOutput {
+    var out: LineOutput;
+    out.color = in.color;
+    out.clip_position = camera.view_proj * vec4<f32>(in.position, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main(in: LineOutput) -> @location(0) vec4<f32> {
+    return in.color;
+}
+"#;
+
+const UI_SHADER_SOURCE: &str = r#"
+struct UiInput {
+    @location(0) position: vec2<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+struct UiOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(in: UiInput) -> UiOutput {
+    var out: UiOutput;
+    out.color = in.color;
+    out.clip_position = vec4<f32>(in.position, 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main(in: UiOutput) -> @location(0) vec4<f32> {
+    return in.color;
+}
+"#;
+
+// ==========================================
+// 3. حالة التطبيق ونظام واجهة بلندر
+// ==========================================
+
+#[derive(PartialEq, Clone, Copy)]
+enum AppMode {
+    ObjectMode,
+    EditMode,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum ShadingMode {
+    Solid,
+    Wireframe,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum ActiveTool {
+    Select,
+    Cursor,
+    Move,
+    Rotate,
+    Scale,
+    Extrude,
+    LoopCut,
+}
 
 struct RenderState {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    render_pipeline: wgpu::RenderPipeline,
+    
+    // خطوط الأنابيب الرسومية
+    solid_pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
+    ui_pipeline: wgpu::RenderPipeline,
+
+    // مخازن المجسمات
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    grid_buffer: wgpu::Buffer,
+    grid_vertex_count: u32,
+
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     depth_texture_view: wgpu::TextureView,
-    
-    // بيانات الكاميرا المدارية
+
+    // متغيرات الكاميرا والتحكم
     camera_yaw: f32,
     camera_pitch: f32,
     camera_distance: f32,
-    is_dragging: bool,
+    is_orbiting: bool,
+    is_zooming: bool,
     last_cursor_pos: (f32, f32),
+    active_touches: HashMap<u64, (f32, f32)>,
+    last_pinch_distance: Option<f32>,
+
+    // حالات بلندر التفاعلية
+    mode: AppMode,
+    shading: ShadingMode,
+    active_tool: ActiveTool,
+    cube_pos: Vec3,
+    cube_rot: Vec3,
+    cube_scale: Vec3,
 }
 
 impl RenderState {
@@ -175,21 +324,49 @@ impl RenderState {
 
         use wgpu::util::DeviceExt;
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
+            label: Some("Cube Vertex Buffer"),
             contents: bytemuck::cast_slice(CUBE_VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
+            label: Some("Cube Index Buffer"),
             contents: bytemuck::cast_slice(CUBE_INDICES),
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // إعداد الكاميرا والـ Uniforms
-        let camera_yaw: f32 = 0.7;
-        let camera_pitch: f32 = 0.5;
-        let camera_distance: f32 = 5.0;
+        // توليد أرضية شبكة الإحداثيات (Blender Floor Grid)
+        let mut grid_lines: Vec<LineVertex> = Vec::new();
+        let grid_size = 8;
+        let grid_color = [0.24, 0.26, 0.30, 0.7];
+        let x_axis_color = [0.85, 0.22, 0.22, 1.0]; // أحمر للمحور X
+        let z_axis_color = [0.22, 0.80, 0.25, 1.0]; // أخضر للمحور Z
+
+        for i in -grid_size..=grid_size {
+            let fi = i as f32;
+            let f_size = grid_size as f32;
+
+            // خطوط موازية لـ X
+            let col = if i == 0 { x_axis_color } else { grid_color };
+            grid_lines.push(LineVertex { position: [-f_size, -1.0, fi], color: col });
+            grid_lines.push(LineVertex { position: [ f_size, -1.0, fi], color: col });
+
+            // خطوط موازية لـ Z
+            let col_z = if i == 0 { z_axis_color } else { grid_color };
+            grid_lines.push(LineVertex { position: [fi, -1.0, -f_size], color: col_z });
+            grid_lines.push(LineVertex { position: [fi, -1.0,  f_size], color: col_z });
+        }
+
+        let grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Grid Buffer"),
+            contents: bytemuck::cast_slice(&grid_lines),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let grid_vertex_count = grid_lines.len() as u32;
+
+        let camera_yaw: f32 = 0.75;
+        let camera_pitch: f32 = 0.50;
+        let camera_distance: f32 = 7.0;
 
         let eye = Vec3::new(
             camera_distance * camera_pitch.cos() * camera_yaw.sin(),
@@ -200,10 +377,15 @@ impl RenderState {
         let aspect = config.width as f32 / config.height as f32;
         let proj = Mat4::perspective_rh(45.0f32.to_radians(), aspect, 0.1, 100.0);
         let view_proj = proj * view;
+        let model = Mat4::IDENTITY;
+
+        let mut uniform_data = Vec::new();
+        uniform_data.extend_from_slice(view_proj.to_cols_array().as_slice());
+        uniform_data.extend_from_slice(model.to_cols_array().as_slice());
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(view_proj.to_cols_array().as_slice()),
+            contents: bytemuck::cast_slice(&uniform_data),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -218,42 +400,49 @@ impl RenderState {
                 },
                 count: None,
             }],
-            label: Some("camera_bind_group_layout"),
+            label: Some("Camera Layout"),
         });
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-            label: Some("camera_bind_group"),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() }],
+            label: Some("Camera Bind Group"),
         });
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
+        // إعداد الشيدرات
+        let solid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Solid Shader"),
+            source: wgpu::ShaderSource::Wgsl(3D_SHADER_SOURCE.into()),
+        });
+        let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Line Shader"),
+            source: wgpu::ShaderSource::Wgsl(LINE_SHADER_SOURCE.into()),
+        });
+        let ui_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("UI Shader"),
+            source: wgpu::ShaderSource::Wgsl(UI_SHADER_SOURCE.into()),
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Pipeline Layout"),
             bind_group_layouts: &[&camera_bind_group_layout],
             push_constant_ranges: &[ ],
         });
 
         let depth_texture_view = Self::create_depth_view(&device, &config);
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
+        // خط أنابيب المجسمات المصمتة
+        let solid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Solid Pipeline"),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &solid_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[Vertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &solid_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -263,22 +452,86 @@ impl RenderState {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
+                ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth24Plus,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                stencil: Default::default(),
+                bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // خط أنابيب شبكة الإحداثيات والخطوط
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Line Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &line_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[LineVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &line_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // خط أنابيب واجهة بلندر (UI 2D Pipeline)
+        let ui_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("UI Layout"),
+            bind_group_layouts: &[ ],
+            push_constant_ranges: &[ ],
+        });
+
+        let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("UI Pipeline"),
+            layout: Some(&ui_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &ui_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[UiVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ui_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
             multiview: None,
             cache: None,
         });
@@ -288,18 +541,31 @@ impl RenderState {
             device,
             queue,
             config,
-            render_pipeline,
+            solid_pipeline,
+            line_pipeline,
+            ui_pipeline,
             vertex_buffer,
             index_buffer,
             num_indices: CUBE_INDICES.len() as u32,
+            grid_buffer,
+            grid_vertex_count,
             camera_buffer,
             camera_bind_group,
             depth_texture_view,
             camera_yaw,
             camera_pitch,
             camera_distance,
-            is_dragging: false,
+            is_orbiting: false,
+            is_zooming: false,
             last_cursor_pos: (0.0, 0.0),
+            active_touches: HashMap::new(),
+            last_pinch_distance: None,
+            mode: AppMode::ObjectMode,
+            shading: ShadingMode::Solid,
+            active_tool: ActiveTool::Select,
+            cube_pos: Vec3::ZERO,
+            cube_rot: Vec3::ZERO,
+            cube_scale: Vec3::ONE,
         }
     }
 
@@ -307,207 +573,4 @@ impl RenderState {
         let size = wgpu::Extent3d {
             width: config.width.max(1),
             height: config.height.max(1),
-            depth_or_array_layers: 1,
-        };
-        let desc = wgpu::TextureDescriptor {
-            label: Some("Depth Texture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth24Plus,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[ ],
-        };
-        let texture = device.create_texture(&desc);
-        texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
-            self.depth_texture_view = Self::create_depth_view(&self.device, &self.config);
-            self.update_camera();
-        }
-    }
-
-    fn update_camera(&mut self) {
-        let eye = Vec3::new(
-            self.camera_distance * self.camera_pitch.cos() * self.camera_yaw.sin(),
-            self.camera_distance * self.camera_pitch.sin(),
-            self.camera_distance * self.camera_pitch.cos() * self.camera_yaw.cos(),
-        );
-        let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
-        let aspect = self.config.width as f32 / self.config.height as f32;
-        let proj = Mat4::perspective_rh(45.0f32.to_radians(), aspect, 0.1, 100.0);
-        let view_proj = proj * view;
-
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(view_proj.to_cols_array().as_slice()),
-        );
-    }
-
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        // لون خلفية رمادي محايد مثل بيئة بلندر Viewport
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.15, g: 0.16, b: 0.18, a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[ ]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-        }
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct App {
-    window: Option<Arc<Window>>,
-    state: Option<RenderState>,
-}
-
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none() {
-            let win_attr = Window::default_attributes().with_title("Rust Mesh Editor");
-            let window = Arc::new(event_loop.create_window(win_attr).unwrap());
-            self.window = Some(window.clone());
-
-            let state = pollster::block_on(RenderState::new(window.clone()));
-            self.state = Some(state);
-            window.request_redraw();
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let (Some(state), Some(window)) = (self.state.as_mut(), self.window.as_ref()) else {
-            return;
-        };
-
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(physical_size) => state.resize(physical_size),
-            
-            // استقبال ضغط الفأرة واللمس
-            WindowEvent::MouseInput { state: element_state, button, .. } => {
-                if button == MouseButton::Left || button == MouseButton::Middle {
-                    state.is_dragging = element_state == ElementState::Pressed;
-                }
-            }
-
-            // استقبال حركة المؤشر وتدوير الكاميرا حول المجسم
-            WindowEvent::CursorMoved { position, .. } => {
-                let (x, y) = (position.x as f32, position.y as f32);
-                if state.is_dragging {
-                    let dx = x - state.last_cursor_pos.0;
-                    let dy = y - state.last_cursor_pos.1;
-
-                    state.camera_yaw += dx * 0.01;
-                    state.camera_pitch = (state.camera_pitch + dy * 0.01).clamp(-1.5, 1.5);
-                    state.update_camera();
-                    window.request_redraw();
-                }
-                state.last_cursor_pos = (x, y);
-            }
-
-            // استقبال التكبير والتصغير عبر عجلة الفأرة (Zoom)
-            WindowEvent::MouseWheel { delta, .. } => {
-                let scroll = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.05,
-                };
-                state.camera_distance = (state.camera_distance - scroll * 0.5).clamp(1.5, 30.0);
-                state.update_camera();
-                window.request_redraw();
-            }
-
-            // دعم إيماءات اللمس المباشر على شاشات الهواتف
-            WindowEvent::Touch(touch) => {
-                let (x, y) = (touch.location.x as f32, touch.location.y as f32);
-                match touch.phase {
-                    TouchPhase::Started => {
-                        state.is_dragging = true;
-                        state.last_cursor_pos = (x, y);
-                    }
-                    TouchPhase::Moved => {
-                        if state.is_dragging {
-                            let dx = x - state.last_cursor_pos.0;
-                            let dy = y - state.last_cursor_pos.1;
-                            state.camera_yaw += dx * 0.01;
-                            state.camera_pitch = (state.camera_pitch + dy * 0.01).clamp(-1.5, 1.5);
-                            state.update_camera();
-                            window.request_redraw();
-                        }
-                        state.last_cursor_pos = (x, y);
-                    }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        state.is_dragging = false;
-                    }
-                }
-            }
-
-            WindowEvent::RedrawRequested => {
-                match state.render() {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost) => state.resize(window.inner_size()),
-                    Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                    Err(e) => log::warn!("خطأ في عرض الإطار: {:?}", e),
-                }
-            }
-            _ => (),
-        }
-    }
-}
-
-#[no_mangle]
-fn android_main(app: AndroidApp) {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("RustMeshEditor"),
-    );
-
-    let event_loop = EventLoop::builder()
-        .with_android_app(app)
-        .build()
-        .expect("فشل إنشاء حلقة الأحداث");
-
-    let mut application = App::default();
-    event_loop.run_app(&mut application).unwrap();
-}
+            depth_or_array_la
