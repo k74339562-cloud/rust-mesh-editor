@@ -24,8 +24,15 @@ slotmap = "1.0"
 log = "0.4"
 android_logger = "0.14"
 pollster = "0.4"
+
 [package.metadata.android]
 package = "com.rustmesh.editor"
 label = "Rust Mesh Editor"
 min_sdk_version = 26
 target_sdk_version = 34
+
+[package.metadata.android.signing.release]
+path = "release.keystore"
+keystore_password = "password123"
+key_alias = "release"
+key_password = "password123"
