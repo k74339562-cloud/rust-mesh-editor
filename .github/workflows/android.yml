@@ -34,6 +34,10 @@ jobs:
       - name: Install cargo-apk
         run: cargo install cargo-apk
 
+      - name: Generate Release Keystore
+        run: |
+          keytool -genkeypair -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass password123 -keypass password123 -dname "CN=RustMeshEditor, OU=Dev, O=Dev, L=City, S=State, C=US"
+
       - name: Build Android APK
         env:
           ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
