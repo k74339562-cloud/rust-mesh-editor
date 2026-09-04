@@ -1,0 +1,26 @@
+[package]
+name = "rust_mesh_editor"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# واجهة وتطبيق أندرويد
+android-activity = { version = "0.6", features = ["native-activity"] }
+winit = { version = "0.30", features = ["android-native-activity"] }
+
+# محرك الرسوميات الحديث (Vulkan على أندرويد)
+wgpu = "24.0"
+
+# العمليات الرياضية وحسابات الفضاء ثلاثي الأبعاد
+glam = "0.29"
+
+# إدارة الذاكرة الطوبولوجية لنواة التعديل (Half-Edge Mesh)
+slotmap = "1.0"
+
+# سجلات ومراقبة الأخطاء في أندرويد
+log = "0.4"
+android_logger = "0.14"
+pollster = "0.4"
