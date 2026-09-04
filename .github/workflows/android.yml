@@ -13,10 +13,36 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Download Blender Official Icons
+        run: |
+          mkdir -p assets/blender_icons
+          BASE_URL="https://projects.blender.org/blender/blender/raw/branch/main/release/datafiles/icons"
+          ICONS=(
+            "ops.transform.translate.svg"
+            "ops.transform.rotate.svg"
+            "ops.transform.resize.svg"
+            "ops.mesh.extrude_region.svg"
+            "ops.mesh.loopcut_slide.svg"
+            "ops.mesh.bevel.svg"
+            "ops.mesh.inset.svg"
+            "shading_wire.svg"
+            "shading_solid.svg"
+            "outliner_ob_mesh.svg"
+            "outliner_ob_camera.svg"
+            "outliner_ob_light.svg"
+          )
+          for icon in "${ICONS[@]}"; do
+            curl -sSL "$BASE_URL/$icon" -o "assets/blender_icons/$icon" || true
+          done
+          echo "تم تحميل أيقونات بلندر الرسمية بنجاح إلى assets/blender_icons/"
+
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Setup Java JDK
         uses: actions/setup-java@v4
