@@ -34,7 +34,6 @@ jobs:
           for icon in "${ICONS[@]}"; do
             curl -sSL "$BASE_URL/$icon" -o "assets/blender_icons/$icon" || true
           done
-          echo "تم تحميل أيقونات بلندر الرسمية بنجاح إلى assets/blender_icons/"
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -45,7 +44,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Setup Java JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
           java-version: '17'
