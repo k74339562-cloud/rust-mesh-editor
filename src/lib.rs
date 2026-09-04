@@ -122,7 +122,7 @@ const CUBE_INDICES: &[u16] = &[
 // 2. شيدرات الرسوميات (WGSL Shaders)
 // ==========================================
 
-const 3D_SHADER_SOURCE: &str = r#"
+const SHADER_3D: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
@@ -155,13 +155,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.7));
     let n = normalize(in.world_normal);
     let diff = max(dot(n, light_dir), 0.22);
-    // تدرج لوني رمادي أزرق يحاكي خامة بلندر الصلبة (Solid MatCap)
     let base_color = vec3<f32>(0.50, 0.54, 0.62);
     return vec4<f32>(base_color * diff, 1.0);
 }
 "#;
 
-const LINE_SHADER_SOURCE: &str = r#"
+const SHADER_LINE: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
@@ -194,7 +193,7 @@ fn fs_main(in: LineOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-const UI_SHADER_SOURCE: &str = r#"
+const SHADER_UI: &str = r#"
 struct UiInput {
     @location(0) position: vec2<f32>,
     @location(1) color: vec4<f32>,
@@ -247,17 +246,16 @@ enum ActiveTool {
 }
 
 struct RenderState {
+    instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    
-    // خطوط الأنابيب الرسومية
+
     solid_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     ui_pipeline: wgpu::RenderPipeline,
 
-    // مخازن المجسمات
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
@@ -335,23 +333,21 @@ impl RenderState {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // توليد أرضية شبكة الإحداثيات (Blender Floor Grid)
+        // توليد أرضية شبكة الإحداثيات
         let mut grid_lines: Vec<LineVertex> = Vec::new();
         let grid_size = 8;
         let grid_color = [0.24, 0.26, 0.30, 0.7];
-        let x_axis_color = [0.85, 0.22, 0.22, 1.0]; // أحمر للمحور X
-        let z_axis_color = [0.22, 0.80, 0.25, 1.0]; // أخضر للمحور Z
+        let x_axis_color = [0.85, 0.22, 0.22, 1.0];
+        let z_axis_color = [0.22, 0.80, 0.25, 1.0];
 
         for i in -grid_size..=grid_size {
             let fi = i as f32;
             let f_size = grid_size as f32;
 
-            // خطوط موازية لـ X
             let col = if i == 0 { x_axis_color } else { grid_color };
             grid_lines.push(LineVertex { position: [-f_size, -1.0, fi], color: col });
             grid_lines.push(LineVertex { position: [ f_size, -1.0, fi], color: col });
 
-            // خطوط موازية لـ Z
             let col_z = if i == 0 { z_axis_color } else { grid_color };
             grid_lines.push(LineVertex { position: [fi, -1.0, -f_size], color: col_z });
             grid_lines.push(LineVertex { position: [fi, -1.0,  f_size], color: col_z });
@@ -409,18 +405,17 @@ impl RenderState {
             label: Some("Camera Bind Group"),
         });
 
-        // إعداد الشيدرات
         let solid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Solid Shader"),
-            source: wgpu::ShaderSource::Wgsl(3D_SHADER_SOURCE.into()),
+            source: wgpu::ShaderSource::Wgsl(SHADER_3D.into()),
         });
         let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Line Shader"),
-            source: wgpu::ShaderSource::Wgsl(LINE_SHADER_SOURCE.into()),
+            source: wgpu::ShaderSource::Wgsl(SHADER_LINE.into()),
         });
         let ui_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("UI Shader"),
-            source: wgpu::ShaderSource::Wgsl(UI_SHADER_SOURCE.into()),
+            source: wgpu::ShaderSource::Wgsl(SHADER_UI.into()),
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -431,7 +426,6 @@ impl RenderState {
 
         let depth_texture_view = Self::create_depth_view(&device, &config);
 
-        // خط أنابيب المجسمات المصمتة
         let solid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Solid Pipeline"),
             layout: Some(&pipeline_layout),
@@ -467,7 +461,6 @@ impl RenderState {
             cache: None,
         });
 
-        // خط أنابيب شبكة الإحداثيات والخطوط
         let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Line Pipeline"),
             layout: Some(&pipeline_layout),
@@ -503,7 +496,6 @@ impl RenderState {
             cache: None,
         });
 
-        // خط أنابيب واجهة بلندر (UI 2D Pipeline)
         let ui_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("UI Layout"),
             bind_group_layouts: &[ ],
@@ -537,6 +529,7 @@ impl RenderState {
         });
 
         Self {
+            instance,
             surface,
             device,
             queue,
@@ -569,443 +562,17 @@ impl RenderState {
         }
     }
 
-    fn create_depth_view(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
-        let size = wgpu::Extent3d {
-            width: config.width.max(1),
-            height: config.height.max(1),
-            depth_or_array_layers: 1,
-        };
-        let desc = wgpu::TextureDescriptor {
-            label: Some("Depth Texture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth24Plus,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[ ],
-        };
-        device.create_texture(&desc).create_view(&Default::default())
-    }
+    // إعادة إنشاء سياق السطح عند العودة من زر Home لمنع الشاشة السوداء نهائياً
+    fn recreate_surface(&mut self, window: Arc<Window>) {
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
 
-    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
+        if let Ok(new_surface) = self.instance.create_surface(window.clone()) {
+            self.surface = new_surface;
+            self.config.width = size.width.max(1);
+            self.config.height = size.height.max(1);
             self.surface.configure(&self.device, &self.config);
             self.depth_texture_view = Self::create_depth_view(&self.device, &self.config);
-            self.update_camera();
-        }
-    }
-
-    fn update_camera(&mut self) {
-        let eye = Vec3::new(
-            self.camera_distance * self.camera_pitch.cos() * self.camera_yaw.sin(),
-            self.camera_distance * self.camera_pitch.sin(),
-            self.camera_distance * self.camera_pitch.cos() * self.camera_yaw.cos(),
-        );
-        let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
-        let aspect = self.config.width as f32 / self.config.height as f32;
-        let proj = Mat4::perspective_rh(45.0f32.to_radians(), aspect, 0.1, 100.0);
-        let view_proj = proj * view;
-
-        let model = Mat4::from_scale_rotation_translation(
-            self.cube_scale,
-            glam::Quat::from_euler(glam::EulerRot::XYZ, self.cube_rot.x, self.cube_rot.y, self.cube_rot.z),
-            self.cube_pos,
-        );
-
-        let mut uniform_data = Vec::new();
-        uniform_data.extend_from_slice(view_proj.to_cols_array().as_slice());
-        uniform_data.extend_from_slice(model.to_cols_array().as_slice());
-
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&uniform_data));
-    }
-
-    // بناء مصفوفة واجهة بلندر ثنائية الأبعاد (Blender UI Overlay)
-    fn build_ui_mesh(&self) -> Vec<UiVertex> {
-        let mut v: Vec<UiVertex> = Vec::new();
-        let w = self.config.width as f32;
-        let h = self.config.height as f32;
-
-        let to_ndc = |px: f32, py: f32| -> [f32; 2] {
-            [ (px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0 ]
-        };
-
-        let mut add_quad = |x: f32, y: f32, width: f32, height: f32, col: [f32; 4]| {
-            let p0 = to_ndc(x, y);
-            let p1 = to_ndc(x + width, y);
-            let p2 = to_ndc(x + width, y + height);
-            let p3 = to_ndc(x, y + height);
-
-            v.push(UiVertex { position: p0, color: col });
-            v.push(UiVertex { position: p3, color: col });
-            v.push(UiVertex { position: p1, color: col });
-
-            v.push(UiVertex { position: p1, color: col });
-            v.push(UiVertex { position: p3, color: col });
-            v.push(UiVertex { position: p2, color: col });
-        };
-
-        // 1. الشريط العلوي (Top Header Bar) - لون رمادي داكن (#242424)
-        add_quad(0.0, 0.0, w, 38.0, [0.14, 0.14, 0.15, 0.96]);
-
-        // زر وضع بلندر (Mode Selector Pill: Object / Edit)
-        let mode_col = if self.mode == AppMode::EditMode {
-            [0.28, 0.45, 0.72, 1.0] // أزرق بلندر النشط
-        } else {
-            [0.22, 0.23, 0.25, 1.0]
-        };
-        add_quad(10.0, 6.0, 110.0, 26.0, mode_col);
-
-        // أزرار الريندر (Shading Modes: Solid / Wireframe)
-        let solid_col = if self.shading == ShadingMode::Solid { [0.28, 0.45, 0.72, 1.0] } else { [0.20, 0.21, 0.23, 1.0] };
-        let wire_col = if self.shading == ShadingMode::Wireframe { [0.28, 0.45, 0.72, 1.0] } else { [0.20, 0.21, 0.23, 1.0] };
-        add_quad(w - 180.0, 6.0, 80.0, 26.0, solid_col);
-        add_quad(w - 90.0, 6.0, 80.0, 26.0, wire_col);
-
-        // 2. شريط أدوات النمذجة الأيسر (Left Tool Shelf - T-Panel)
-        add_quad(0.0, 38.0, 48.0, h - 68.0, [0.13, 0.13, 0.14, 0.94]);
-
-        // أيقونات وأزرار الأدوات
-        let tools = [
-            ActiveTool::Select,
-            ActiveTool::Cursor,
-            ActiveTool::Move,
-            ActiveTool::Rotate,
-            ActiveTool::Scale,
-            ActiveTool::Extrude,
-            ActiveTool::LoopCut,
-        ];
-
-        for (idx, tool) in tools.iter().enumerate() {
-            let ty = 46.0 + (idx as f32 * 42.0);
-            let btn_col = if self.active_tool == *tool {
-                [0.28, 0.45, 0.72, 1.0] // نشط باللون الأزرق
-            } else {
-                [0.19, 0.20, 0.22, 0.9]
-            };
-            add_quad(6.0, ty, 36.0, 36.0, btn_col);
-        }
-
-        // 3. اللوحة الجانبية اليمنى (Right Panel - Outliner & Properties)
-        let right_w = 210.0;
-        add_quad(w - right_w, 38.0, right_w, h - 68.0, [0.12, 0.12, 0.13, 0.95]);
-
-        // صندوق شجرة المشهد (Scene Outliner Box)
-        add_quad(w - right_w + 8.0, 46.0, right_w - 16.0, 90.0, [0.16, 0.17, 0.18, 0.9]);
-        // عنصر المكعب المحدد بلون بلندر البرتقالي (#E29827)
-        add_quad(w - right_w + 12.0, 72.0, right_w - 24.0, 22.0, [0.88, 0.58, 0.15, 0.85]);
-
-        // صندوق الخصائص (Transform Properties Box)
-        add_quad(w - right_w + 8.0, 144.0, right_w - 16.0, 140.0, [0.16, 0.17, 0.18, 0.9]);
-
-        // 4. الشريط السفلي (Bottom Status Bar)
-        add_quad(0.0, h - 30.0, w, 30.0, [0.11, 0.11, 0.12, 0.98]);
-
-        v
-    }
-
-    fn handle_ui_click(&mut self, x: f32, y: f32) -> bool {
-        let w = self.config.width as f32;
-
-        // النقر على محول الأوضاع (Object Mode / Edit Mode)
-        if x >= 10.0 && x <= 120.0 && y >= 6.0 && y <= 32.0 {
-            self.mode = if self.mode == AppMode::ObjectMode { AppMode::EditMode } else { AppMode::ObjectMode };
-            return true;
-        }
-
-        // النقر على أزرار الريندر (Solid / Wireframe)
-        if x >= w - 180.0 && x <= w - 100.0 && y >= 6.0 && y <= 32.0 {
-            self.shading = ShadingMode::Solid;
-            return true;
-        }
-        if x >= w - 90.0 && x <= w - 10.0 && y >= 6.0 && y <= 32.0 {
-            self.shading = ShadingMode::Wireframe;
-            return true;
-        }
-
-        // النقر على شريط الأدوات الأيسر
-        if x <= 48.0 && y >= 46.0 {
-            let idx = ((y - 46.0) / 42.0) as usize;
-            match idx {
-                0 => self.active_tool = ActiveTool::Select,
-                1 => self.active_tool = ActiveTool::Cursor,
-                2 => self.active_tool = ActiveTool::Move,
-                3 => self.active_tool = ActiveTool::Rotate,
-                4 => self.active_tool = ActiveTool::Scale,
-                5 => self.active_tool = ActiveTool::Extrude,
-                6 => self.active_tool = ActiveTool::LoopCut,
-                _ => (),
-            }
-            return true;
-        }
-
-        // هل النقرة داخل اللوحة اليمنى؟
-        if x >= w - 210.0 {
-            return true;
-        }
-
-        false
-    }
-
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&Default::default());
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-
-        // 1. مسار رسم المشهد ثلاثي الأبعاد والشبكة
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("3D Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.18, g: 0.19, b: 0.22, a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture_view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            // رسم أرضية الإحداثيات (Floor Grid)
-            render_pass.set_pipeline(&self.line_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[ ]);
-            render_pass.set_vertex_buffer(0, self.grid_buffer.slice(..));
-            render_pass.draw(0..self.grid_vertex_count, 0..1);
-
-            // رسم المجسم (إذا كان وضع Solid مفعل)
-            if self.shading == ShadingMode::Solid {
-                render_pass.set_pipeline(&self.solid_pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[ ]);
-                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-            }
-        }
-
-        // 2. مسار رسم واجهة بلندر (UI Overlay Pass)
-        let ui_vertices = self.build_ui_mesh();
-        use wgpu::util::DeviceExt;
-        let ui_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("UI Buffer"),
-            contents: bytemuck::cast_slice(&ui_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        {
-            let mut ui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("UI Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            ui_pass.set_pipeline(&self.ui_pipeline);
-            ui_pass.set_vertex_buffer(0, ui_buffer.slice(..));
-            ui_pass.draw(0..ui_vertices.len() as u32, 0..1);
-        }
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        Ok(())
-    }
-}
-
-// ==========================================
-// 4. تطبيق أندرويد واستقبال المدخلات
-// ==========================================
-
-#[derive(Default)]
-struct App {
-    window: Option<Arc<Window>>,
-    state: Option<RenderState>,
-}
-
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none() {
-            let win_attr = Window::default_attributes().with_title("Rust Mesh Editor");
-            let window = Arc::new(event_loop.create_window(win_attr).unwrap());
-            self.window = Some(window.clone());
-
-            let state = pollster::block_on(RenderState::new(window.clone()));
-            self.state = Some(state);
-            window.request_redraw();
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let (Some(state), Some(window)) = (self.state.as_mut(), self.window.as_ref()) else {
-            return;
-        };
-
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(physical_size) => state.resize(physical_size),
-
-            // دعم اختصارات الكيبورد الرسمية لبلندر (Tab, G, R, S)
-            WindowEvent::KeyboardInput { event: key_event, .. } => {
-                if key_event.state == ElementState::Pressed {
-                    if let PhysicalKey::Code(code) = key_event.physical_key {
-                        match code {
-                            KeyCode::Tab => {
-                                state.mode = if state.mode == AppMode::ObjectMode { AppMode::EditMode } else { AppMode::ObjectMode };
-                                window.request_redraw();
-                            }
-                            KeyCode::KeyG => {
-                                state.active_tool = ActiveTool::Move;
-                                window.request_redraw();
-                            }
-                            KeyCode::KeyR => {
-                                state.active_tool = ActiveTool::Rotate;
-                                window.request_redraw();
-                            }
-                            KeyCode::KeyS => {
-                                state.active_tool = ActiveTool::Scale;
-                                window.request_redraw();
-                            }
-                            _ => (),
-                        }
-                    }
-                }
-            }
-
-            WindowEvent::MouseInput { state: element_state, button, .. } => {
-                if element_state == ElementState::Pressed {
-                    let (x, y) = state.last_cursor_pos;
-                    if state.handle_ui_click(x, y) {
-                        window.request_redraw();
-                        return;
-                    }
-                }
-
-                match button {
-                    MouseButton::Left | MouseButton::Middle => {
-                        state.is_orbiting = element_state == ElementState::Pressed;
-                    }
-                    MouseButton::Right => {
-                        state.is_zooming = element_state == ElementState::Pressed;
-                    }
-                    _ => (),
-                }
-            }
-
-            WindowEvent::CursorMoved { position, .. } => {
-                let (x, y) = (position.x as f32, position.y as f32);
-                let dx = x - state.last_cursor_pos.0;
-                let dy = y - state.last_cursor_pos.1;
-
-                if state.is_orbiting {
-                    state.camera_yaw += dx * 0.008;
-                    state.camera_pitch = (state.camera_pitch + dy * 0.008).clamp(-1.5, 1.5);
-                    state.update_camera();
-                    window.request_redraw();
-                } else if state.is_zooming {
-                    state.camera_distance = (state.camera_distance + dy * 0.03).clamp(2.0, 30.0);
-                    state.update_camera();
-                    window.request_redraw();
-                }
-
-                state.last_cursor_pos = (x, y);
-            }
-
-            WindowEvent::MouseWheel { delta, .. } => {
-                let scroll = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y * 1.5,
-                    MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.05,
-                };
-                state.camera_distance = (state.camera_distance - scroll * 0.6).clamp(2.0, 30.0);
-                state.update_camera();
-                window.request_redraw();
-            }
-
-            WindowEvent::Touch(touch) => {
-                let (x, y) = (touch.location.x as f32, touch.location.y as f32);
-
-                match touch.phase {
-                    TouchPhase::Started => {
-                        if state.handle_ui_click(x, y) {
-                            window.request_redraw();
-                            return;
-                        }
-                        state.active_touches.insert(touch.id, (x, y));
-                        if state.active_touches.len() == 1 {
-                            state.last_cursor_pos = (x, y);
-                        }
-                    }
-                    TouchPhase::Moved => {
-                        state.active_touches.insert(touch.id, (x, y));
-                        if state.active_touches.len() == 1 {
-                            let dx = x - state.last_cursor_pos.0;
-                            let dy = y - state.last_cursor_pos.1;
-                            state.camera_yaw += dx * 0.008;
-                            state.camera_pitch = (state.camera_pitch + dy * 0.008).clamp(-1.5, 1.5);
-                            state.update_camera();
-                            window.request_redraw();
-                            state.last_cursor_pos = (x, y);
-                        } else if state.active_touches.len() >= 2 {
-                            let points: Vec<(f32, f32)> = state.active_touches.values().copied().collect();
-                            let current_dist = ((points[0].0 - points[1].0).powi(2) + (points[0].1 - points[1].1).powi(2)).sqrt();
-                            if let Some(prev) = state.last_pinch_distance {
-                                let delta = current_dist - prev;
-                                state.camera_distance = (state.camera_distance - delta * 0.02).clamp(2.0, 30.0);
-                                state.update_camera();
-                                window.request_redraw();
-                            }
-                            state.last_pinch_distance = Some(current_dist);
-                        }
-                    }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        state.active_touches.remove(&touch.id);
-                        if state.active_touches.len() < 2 {
-                            state.last_pinch_distance = None;
-                        }
-                    }
-                }
-            }
-
-            WindowEvent::RedrawRequested => {
-                match state.render() {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost) => state.resize(window.inner_size()),
-                    Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                    Err(e) => log::warn!("Render error: {:?}", e),
-                }
-            }
-            _ => (),
-        }
-    }
-}
-
-#[no_mangle]
-fn android_main(app: AndroidApp) {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("RustMeshEditor"),
-    );
-
-    let event_loop = EventLoop::builder()
-        .with_android_app(app)
-        .build()
-        .expect("Failed to build event loop");
-
-    let mut application = App::default();
-    event_loop.run_app(&mut application).unwrap();
-}
+         
