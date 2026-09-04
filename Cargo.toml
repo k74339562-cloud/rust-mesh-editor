@@ -22,7 +22,7 @@ package = "com.rustmesh.editor"
 label = "Rust Mesh Editor"
 min_sdk_version = 26
 target_sdk_version = 34
-orientation = "sensorLandscape"
+orientation = "fullSensor"
 
 [package.metadata.android.signing.release]
 path = "release.keystore"
